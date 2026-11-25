@@ -13,14 +13,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '21'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK & Accept Licenses
         uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: |
+          SDK_BIN="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDK_BIN" ]; then
+            yes | "$SDK_BIN" --licenses >/dev/null 2>&1 || true
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -36,7 +43,7 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Upload Yout APK
         uses: actions/upload-artifact@v4
