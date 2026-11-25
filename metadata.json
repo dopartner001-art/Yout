@@ -1,0 +1,6 @@
+{
+  "name": "Yout",
+  "description": "Transparent remote support, screen sharing, and quick-connect assistant via temporary code or link.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
