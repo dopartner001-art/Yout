@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">Yout</string>
-    <string name="accessibility_service_description">Yout Remote Support uses Accessibility only during an active user-approved support session to perform remote navigation (Back, Home, Recents, Notifications) and tap gestures requested by the connected helper. Both parties see live status and can disconnect anytime.</string>
 </resources>

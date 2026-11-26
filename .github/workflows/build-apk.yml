@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -35,20 +38,35 @@ jobs:
           unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
           echo "/tmp/gradle-dist/gradle-9.3.1/bin" >> "$GITHUB_PATH"
 
-      - name: Prepare debug keystore
+      - name: Prepare signing keystores
         run: |
           if [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           else
             keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
+          keytool -genkeypair -v -keystore my-upload-key.jks -storepass youtrelease2026 -alias upload -keypass youtrelease2026 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Yout Support,O=Yout,C=BD"
 
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Build Release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: youtrelease2026
+          KEY_PASSWORD: youtrelease2026
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Upload Yout APK
+      - name: Copy direct APK
+        run: cp app/build/outputs/apk/release/app-release.apk Yout.apk
+
+      - name: Upload Yout APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Yout-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: Yout.apk
           if-no-files-found: error
+
+      - name: Publish direct APK to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest -y || true
+          gh release create latest Yout.apk --title "Yout Latest Release APK" --notes "Direct APK download for Android (no unzip needed). Open the laptop browser link inside the app to view from a laptop."

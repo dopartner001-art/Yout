@@ -23,6 +23,7 @@ enum class ConnectionState {
   DISCONNECTED,
   LISTENING,
   CONNECTING,
+  RECONNECTING,
   AWAITING_CONSENT,
   CONNECTED,
 }
@@ -65,9 +66,20 @@ data class IncomingConsentRequest(
   val peerAddress: String,
 )
 
+data class TapMarker(
+  val xNorm: Float,
+  val yNorm: Float,
+  val createdAtMs: Long,
+)
+
+data class GuidedPrompt(
+  val command: RemoteNavCommand,
+  val createdAtMs: Long,
+)
+
 data class PermissionStatus(
   val screenCaptureActive: Boolean = false,
-  val accessibilityEnabled: Boolean = false,
+  val guidedPointerReady: Boolean = true,
   val cameraGranted: Boolean = false,
   val micGranted: Boolean = false,
   val notificationsGranted: Boolean = true,
@@ -81,6 +93,7 @@ data class SupportUiState(
   val temporaryCode: String = "",
   val localIpAddress: String = "127.0.0.1",
   val localPort: Int = 8765,
+  val webPort: Int = 8766,
   val role: SessionRole = SessionRole.IDLE,
   val connectionState: ConnectionState = ConnectionState.LISTENING,
   val peerDeviceName: String = "",
@@ -91,6 +104,8 @@ data class SupportUiState(
   val incomingConsent: IncomingConsentRequest? = null,
   val remoteScreenFrame: Bitmap? = null,
   val remoteCameraFrame: Bitmap? = null,
+  val guidedTapMarker: TapMarker? = null,
+  val guidedNavPrompt: GuidedPrompt? = null,
   val auditLogs: List<AuditLogEntry> = emptyList(),
   val chatMessages: List<ChatMessage> = emptyList(),
   val statusBannerError: String? = null,
@@ -110,4 +125,5 @@ object WirePacketType {
   const val CHAT: Byte = 10
   const val CAPABILITY_SYNC: Byte = 11
   const val DISCONNECT: Byte = 12
+  const val PING: Byte = 13
 }

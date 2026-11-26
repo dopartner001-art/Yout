@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -15,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,18 +27,23 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.DynamicFeed
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Notifications
@@ -45,9 +52,11 @@ import androidx.compose.material.icons.rounded.StopScreenShare
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.VideocamOff
+import androidx.compose.material.icons.rounded.ZoomOutMap
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -57,13 +66,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -73,6 +86,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.i18n.AppCopy
@@ -106,7 +121,10 @@ fun RemoteControlScreen(
   onToggleCamera: () -> Unit,
   onFlipCamera: () -> Unit,
   onLocalCameraFrame: (ByteArray) -> Unit,
+  onDisconnect: () -> Unit,
 ) {
+  var showFullscreen by remember { mutableStateOf(false) }
+
   Box(
     modifier = Modifier.fillMaxSize(),
     contentAlignment = Alignment.TopCenter,
@@ -118,6 +136,56 @@ fun RemoteControlScreen(
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+      if (state.guidedNavPrompt != null || state.guidedTapMarker != null) {
+        item {
+          Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = ElectricBlue.copy(alpha = 0.18f),
+            border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.65f)),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              modifier = Modifier.padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.TouchApp,
+                contentDescription = null,
+                tint = CyanGlow,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(modifier = Modifier.width(10.dp))
+              val promptText = buildString {
+                state.guidedNavPrompt?.let {
+                  append(
+                    if (state.language == AppLanguage.BANGLA) {
+                      "নির্দেশনা: ${it.command.wireCode} বাটন চাপুন"
+                    } else {
+                      "Guide: Press ${it.command.wireCode}"
+                    },
+                  )
+                }
+                state.guidedTapMarker?.let {
+                  if (isNotEmpty()) append("  •  ")
+                  append(
+                    if (state.language == AppLanguage.BANGLA) {
+                      "পয়েন্টার: (${(it.xNorm * 100).toInt()}%, ${(it.yNorm * 100).toInt()}%)"
+                    } else {
+                      "Pointer: (${(it.xNorm * 100).toInt()}%, ${(it.yNorm * 100).toInt()}%)"
+                    },
+                  )
+                }
+              }
+              Text(
+                text = promptText,
+                style = MaterialTheme.typography.labelLarge,
+                color = PureWhite,
+              )
+            }
+          }
+        }
+      }
+
       // Live Screen View & Sharing Control
       item {
         Surface(
@@ -139,12 +207,33 @@ fun RemoteControlScreen(
                 modifier = Modifier.weight(1f),
               )
               if (state.remoteScreenFrame != null) {
-                Icon(
-                  imageVector = Icons.Rounded.TouchApp,
-                  contentDescription = null,
-                  tint = CyanGlow,
-                  modifier = Modifier.size(18.dp),
-                )
+                Surface(
+                  shape = RoundedCornerShape(50),
+                  color = ElectricBlue.copy(alpha = 0.22f),
+                  border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.7f)),
+                  modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable { showFullscreen = true }
+                    .testTag("open_fullscreen_button"),
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.Fullscreen,
+                      contentDescription = copy.fullscreenOpenBtn,
+                      tint = CyanGlow,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                      text = copy.fullscreenOpenBtn,
+                      style = MaterialTheme.typography.labelMedium,
+                      color = PureWhite,
+                    )
+                  }
+                }
               }
             }
 
@@ -152,26 +241,39 @@ fun RemoteControlScreen(
 
             val screenBmp = state.remoteScreenFrame
             if (screenBmp != null) {
-              Image(
-                bitmap = screenBmp.asImageBitmap(),
-                contentDescription = copy.remoteScreenTitle,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .aspectRatio(9f / 16f)
-                  .clip(RoundedCornerShape(14.dp))
-                  .background(MidnightBg)
-                  .pointerInput(screenBmp) {
-                    detectTapGestures { offset ->
-                      if (size.width > 0 && size.height > 0) {
-                        val xNorm = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        val yNorm = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
-                        onSendRemoteTap(xNorm, yNorm)
+              val frameAspect = (screenBmp.width.toFloat() / screenBmp.height.coerceAtLeast(1))
+                .coerceIn(0.4f, 2.2f)
+              Box(modifier = Modifier.fillMaxWidth()) {
+                Image(
+                  bitmap = screenBmp.asImageBitmap(),
+                  contentDescription = copy.remoteScreenTitle,
+                  contentScale = ContentScale.Fit,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(frameAspect)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MidnightBg)
+                    .pointerInput(screenBmp) {
+                      detectTapGestures { offset ->
+                        if (size.width > 0 && size.height > 0) {
+                          val xNorm = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                          val yNorm = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                          onSendRemoteTap(xNorm, yNorm)
+                        }
                       }
                     }
-                  }
-                  .testTag("remote_screen_canvas"),
-              )
+                    .testTag("remote_screen_canvas"),
+                )
+                Icon(
+                  imageVector = Icons.Rounded.TouchApp,
+                  contentDescription = null,
+                  tint = CyanGlow.copy(alpha = 0.8f),
+                  modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(20.dp),
+                )
+              }
             } else {
               Surface(
                 shape = RoundedCornerShape(14.dp),
@@ -541,6 +643,167 @@ fun RemoteControlScreen(
       }
 
       item { Spacer(modifier = Modifier.height(8.dp)) }
+    }
+  }
+
+  val activeScreenFrame = state.remoteScreenFrame
+  if (showFullscreen && activeScreenFrame != null) {
+    FullscreenRemoteScreenDialog(
+      bitmap = activeScreenFrame,
+      copy = copy,
+      onSendRemoteTap = onSendRemoteTap,
+      onSendNavCommand = onSendNavCommand,
+      onDisconnect = {
+        showFullscreen = false
+        onDisconnect()
+      },
+      onDismiss = { showFullscreen = false },
+    )
+  }
+}
+
+@Composable
+private fun FullscreenRemoteScreenDialog(
+  bitmap: Bitmap,
+  copy: AppCopy,
+  onSendRemoteTap: (Float, Float) -> Unit,
+  onSendNavCommand: (RemoteNavCommand) -> Unit,
+  onDisconnect: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var scale by remember { mutableFloatStateOf(1f) }
+  var pan by remember { mutableStateOf(Offset.Zero) }
+
+  Dialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(
+      usePlatformDefaultWidth = false,
+      decorFitsSystemWindows = false,
+    ),
+  ) {
+    BackHandler { onDismiss() }
+    Surface(
+      color = MidnightBg,
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .statusBarsPadding()
+          .navigationBarsPadding(),
+      ) {
+        val frameAspect = (bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1))
+          .coerceIn(0.4f, 2.2f)
+
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+              detectTransformGestures { _, panChange, zoomChange, _ ->
+                val newScale = (scale * zoomChange).coerceIn(1f, 3.5f)
+                scale = newScale
+                pan = if (newScale > 1.01f) {
+                  Offset(pan.x + panChange.x, pan.y + panChange.y)
+                } else {
+                  Offset.Zero
+                }
+              }
+            },
+          contentAlignment = Alignment.Center,
+        ) {
+          Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = copy.remoteScreenTitle,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+              .fillMaxSize()
+              .aspectRatio(frameAspect)
+              .graphicsLayer(
+                scaleX = scale,
+                scaleY = scale,
+                translationX = pan.x,
+                translationY = pan.y,
+              )
+              .pointerInput(bitmap) {
+                detectTapGestures { offset ->
+                  if (size.width > 0 && size.height > 0) {
+                    val xNorm = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                    val yNorm = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                    onSendRemoteTap(xNorm, yNorm)
+                  }
+                }
+              }
+              .testTag("fullscreen_remote_canvas"),
+          )
+        }
+
+        // Top hint & exit pill
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = MidnightCard.copy(alpha = 0.88f),
+          border = BorderStroke(1.dp, MidnightOutline),
+          modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = 10.dp),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = copy.pinchZoomHint,
+              style = MaterialTheme.typography.labelSmall,
+              color = CyanGlow,
+            )
+            if (scale > 1.05f) {
+              Spacer(modifier = Modifier.width(8.dp))
+              Icon(
+                imageVector = Icons.Rounded.ZoomOutMap,
+                contentDescription = null,
+                tint = PureWhite,
+                modifier = Modifier
+                  .size(18.dp)
+                  .clickable {
+                    scale = 1f
+                    pan = Offset.Zero
+                  },
+              )
+            }
+          }
+        }
+
+        // Bottom floating quick nav + disconnect bar
+        Surface(
+          shape = RoundedCornerShape(28.dp),
+          color = MidnightCard.copy(alpha = 0.94f),
+          border = BorderStroke(1.dp, MidnightOutline),
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 12.dp, start = 16.dp, end = 16.dp),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            IconButton(onClick = { onSendNavCommand(RemoteNavCommand.BACK) }) {
+              Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = copy.navBack, tint = CyanGlow)
+            }
+            IconButton(onClick = { onSendNavCommand(RemoteNavCommand.HOME) }) {
+              Icon(Icons.Rounded.Home, contentDescription = copy.navHome, tint = CyanGlow)
+            }
+            IconButton(onClick = { onSendNavCommand(RemoteNavCommand.RECENTS) }) {
+              Icon(Icons.Rounded.DynamicFeed, contentDescription = copy.navRecents, tint = CyanGlow)
+            }
+            IconButton(onClick = onDismiss) {
+              Icon(Icons.Rounded.FullscreenExit, contentDescription = copy.fullscreenExitBtn, tint = PureWhite)
+            }
+            IconButton(onClick = onDisconnect) {
+              Icon(Icons.AutoMirrored.Rounded.ExitToApp, contentDescription = copy.disconnectNowShort, tint = CoralAlert)
+            }
+          }
+        }
+      }
     }
   }
 }

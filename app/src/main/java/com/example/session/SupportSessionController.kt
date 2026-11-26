@@ -13,16 +13,18 @@ import com.example.model.AppLanguage
 import com.example.model.AuditLogEntry
 import com.example.model.ChatMessage
 import com.example.model.ConnectionState
+import com.example.model.GuidedPrompt
 import com.example.model.IncomingConsentRequest
 import com.example.model.MainTab
-import com.example.model.PermissionStatus
 import com.example.model.RemoteNavCommand
 import com.example.model.SessionRole
 import com.example.model.SupportUiState
+import com.example.model.TapMarker
 import com.example.model.WirePacketType
 import com.example.network.P2pTransportManager
 import com.example.network.TransportListener
-import com.example.service.YoutRemoteAccessibilityService
+import com.example.network.WebBridgeListener
+import com.example.network.WebBridgeServer
 import com.example.service.YoutSupportService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -35,13 +37,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-object SupportSessionController : TransportListener {
+object SupportSessionController : TransportListener, WebBridgeListener {
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val _uiState = MutableStateFlow(
@@ -52,11 +55,15 @@ object SupportSessionController : TransportListener {
   val uiState: StateFlow<SupportUiState> = _uiState.asStateFlow()
 
   private var transport: P2pTransportManager? = null
+  private var webServer: WebBridgeServer? = null
   private var voiceManager: VoiceCallManager? = null
   private var pendingConsentDeferred: CompletableDeferred<Boolean>? = null
   private var timerJob: Job? = null
   private var appContext: Context? = null
   private var initialized = false
+
+  @Volatile
+  private var latestLocalScreenJpeg: ByteArray? = null
 
   fun initialize(context: Context) {
     appContext = context.applicationContext
@@ -65,21 +72,28 @@ object SupportSessionController : TransportListener {
       val mgr = P2pTransportManager(this)
       mgr.localDeviceName = _uiState.value.deviceName.ifBlank { "Yout Phone" }
       transport = mgr
+
+      val web = WebBridgeServer(this)
+      webServer = web
+      web.start(8766)
+
       voiceManager = VoiceCallManager(context.applicationContext) { chunk ->
         transport?.sendPacket(WirePacketType.AUDIO_PCM, chunk)
       }
+      mgr.startHostServer()
+
       _uiState.update {
         it.copy(
           temporaryCode = mgr.expectedCode,
           localIpAddress = mgr.discoverLocalIpv4Address(),
           localPort = mgr.boundPort,
+          webPort = web.boundPort,
           connectionState = ConnectionState.LISTENING,
         )
       }
-      mgr.startHostServer()
       addAuditLog(
-        bn = "টেম্পোরারি কোড তৈরি ও লোকাল P2P হোস্ট চালু হয়েছে",
-        en = "Temporary session code generated & local P2P host started",
+        bn = "টেম্পোরারি কোড তৈরি ও মোবাইল/ল্যাপটপ সাপোর্ট হোস্ট চালু হয়েছে",
+        en = "Temporary session code ready & mobile/laptop host started",
       )
     }
     refreshPermissions(context)
@@ -96,19 +110,19 @@ object SupportSessionController : TransportListener {
     } else {
       true
     }
-    val accessibility = YoutRemoteAccessibilityService.isEnabled(context)
     val writeSettings = Settings.System.canWrite(context)
 
     _uiState.update { state ->
       state.copy(
         permissions = state.permissions.copy(
-          accessibilityEnabled = accessibility,
+          guidedPointerReady = true,
           cameraGranted = cam,
           micGranted = mic,
           notificationsGranted = notif,
           writeSettingsGranted = writeSettings,
         ),
         localIpAddress = transport?.discoverLocalIpv4Address() ?: state.localIpAddress,
+        webPort = webServer?.boundPort ?: state.webPort,
       )
     }
   }
@@ -133,6 +147,11 @@ object SupportSessionController : TransportListener {
   fun buildShareLink(): String {
     val mgr = transport ?: return ""
     return mgr.buildDeepLink()
+  }
+
+  fun buildLaptopWebUrl(): String {
+    val state = _uiState.value
+    return "http://${state.localIpAddress}:${state.webPort}/?code=${state.temporaryCode}"
   }
 
   fun buildManualToken(): String {
@@ -177,12 +196,14 @@ object SupportSessionController : TransportListener {
   }
 
   fun disconnectSession(reason: String = "Disconnected by user") {
-    appContext?.let { YoutSupportService.stopCapture(it) }
+    webServer?.clearActiveWebSession()
+    appContext?.let { YoutSupportService.stopAll(it) }
     voiceManager?.stop()
     transport?.disconnect(reason)
   }
 
   fun onScreenSharingStateChanged(active: Boolean) {
+    if (!active) latestLocalScreenJpeg = null
     _uiState.update { state ->
       state.copy(
         permissions = state.permissions.copy(screenCaptureActive = active),
@@ -197,6 +218,7 @@ object SupportSessionController : TransportListener {
   }
 
   fun onLocalScreenFrameCaptured(jpegBytes: ByteArray) {
+    latestLocalScreenJpeg = jpegBytes
     if (_uiState.value.connectionState == ConnectionState.CONNECTED) {
       transport?.sendPacket(WirePacketType.SCREEN_FRAME, jpegBytes)
     }
@@ -216,15 +238,14 @@ object SupportSessionController : TransportListener {
     ) {
       transport?.sendPacket(WirePacketType.NAV_COMMAND, command.wireCode.toByteArray(Charsets.UTF_8))
       addAuditLog(
-        bn = "রিমোট কমান্ড পাঠানো হয়েছে: ${command.wireCode}",
-        en = "Sent remote command: ${command.wireCode}",
+        bn = "গাইডেড নির্দেশনা পাঠানো হয়েছে: ${command.wireCode}",
+        en = "Sent guided prompt: ${command.wireCode}",
       )
     } else {
-      val executed = YoutRemoteAccessibilityService.instance?.executeNavigationCommand(command) == true
+      _uiState.update { it.copy(guidedNavPrompt = GuidedPrompt(command, System.currentTimeMillis())) }
       addAuditLog(
-        bn = if (executed) "লোকাল নেভিগেশন (${command.wireCode}) সম্পন্ন" else "নেভিগেশনের জন্য Accessibility চালু করুন",
-        en = if (executed) "Executed local nav (${command.wireCode})" else "Enable Accessibility service for nav control",
-        isAlert = !executed,
+        bn = "গাইডেড নির্দেশনা: ${command.wireCode}",
+        en = "Guided prompt: ${command.wireCode}",
       )
     }
   }
@@ -238,9 +259,10 @@ object SupportSessionController : TransportListener {
         .put("y", yNorm.toDouble())
         .toString()
       transport?.sendPacket(WirePacketType.TAP_GESTURE, json.toByteArray(Charsets.UTF_8))
+      _uiState.update { it.copy(guidedTapMarker = TapMarker(xNorm, yNorm, System.currentTimeMillis())) }
       addAuditLog(
-        bn = "রিমোট স্ক্রিনে ট্যাপ পাঠানো হয়েছে",
-        en = "Sent remote screen tap",
+        bn = "স্ক্রিনে গাইডেড পয়েন্টার পাঠানো হয়েছে",
+        en = "Sent guided tap pointer",
       )
     }
   }
@@ -329,7 +351,7 @@ object SupportSessionController : TransportListener {
     val caps = _uiState.value.capabilities
     val json = JSONObject()
       .put("screen", caps.screenSharing)
-      .put("control", _uiState.value.permissions.accessibilityEnabled)
+      .put("control", true)
       .put("voice", caps.voiceCallActive)
       .put("camera", caps.cameraSharing)
       .toString()
@@ -384,6 +406,7 @@ object SupportSessionController : TransportListener {
         it.copy(
           localIpAddress = ipAddress,
           localPort = port,
+          webPort = webServer?.boundPort ?: it.webPort,
           connectionState = if (it.connectionState == ConnectionState.CONNECTED) {
             ConnectionState.CONNECTED
           } else {
@@ -421,18 +444,20 @@ object SupportSessionController : TransportListener {
 
   override fun onConnected(isHost: Boolean, peerName: String, peerEndpoint: String) {
     scope.launch {
+      appContext?.let { YoutSupportService.startSessionKeepAlive(it) }
       _uiState.update {
         it.copy(
           role = if (isHost) SessionRole.HOST else SessionRole.CONTROLLER,
           connectionState = ConnectionState.CONNECTED,
           peerDeviceName = peerName,
           peerEndpoint = peerEndpoint,
-          sessionDurationSeconds = 0L,
           statusBannerError = null,
           activeTab = MainTab.REMOTE_CONTROL,
         )
       }
-      startSessionTimer()
+      if (timerJob?.isActive != true) {
+        startSessionTimer()
+      }
       syncCapabilitiesToPeer()
       addAuditLog(
         bn = "$peerName এর সাথে স্বচ্ছ সেশন সংযুক্ত হয়েছে",
@@ -441,11 +466,24 @@ object SupportSessionController : TransportListener {
     }
   }
 
+  override fun onReconnecting(peerEndpoint: String) {
+    scope.launch {
+      _uiState.update {
+        it.copy(connectionState = ConnectionState.RECONNECTING)
+      }
+      addAuditLog(
+        bn = "নেটওয়ার্ক পুনরুদ্ধার করা হচ্ছে ($peerEndpoint)...",
+        en = "Reconnecting session ($peerEndpoint)...",
+      )
+    }
+  }
+
   override fun onDisconnected(reason: String) {
     scope.launch {
       stopSessionTimer()
       voiceManager?.stop()
-      appContext?.let { YoutSupportService.stopCapture(it) }
+      webServer?.clearActiveWebSession()
+      appContext?.let { YoutSupportService.stopAll(it) }
       _uiState.update {
         it.copy(
           role = SessionRole.IDLE,
@@ -455,6 +493,8 @@ object SupportSessionController : TransportListener {
           sessionDurationSeconds = 0L,
           remoteScreenFrame = null,
           remoteCameraFrame = null,
+          guidedTapMarker = null,
+          guidedNavPrompt = null,
           capabilities = ActiveCapabilities(),
           incomingConsent = null,
           permissions = it.permissions.copy(screenCaptureActive = false),
@@ -488,12 +528,11 @@ object SupportSessionController : TransportListener {
       WirePacketType.NAV_COMMAND -> {
         val cmdName = String(payload, Charsets.UTF_8)
         val cmd = RemoteNavCommand.entries.find { it.wireCode == cmdName } ?: return
-        val ok = YoutRemoteAccessibilityService.instance?.executeNavigationCommand(cmd) == true
         scope.launch {
+          _uiState.update { it.copy(guidedNavPrompt = GuidedPrompt(cmd, System.currentTimeMillis())) }
           addAuditLog(
-            bn = if (ok) "অপর পক্ষ রিমোট নেভিগেশন করেছে: $cmdName" else "রিমোট নেভিগেশন ($cmdName) ব্যর্থ — Accessibility চালু নেই",
-            en = if (ok) "Peer triggered remote nav: $cmdName" else "Remote nav ($cmdName) skipped — Accessibility disabled",
-            isAlert = !ok,
+            bn = "সহায়তাকারী নির্দেশনা দিয়েছেন: $cmdName চাপুন",
+            en = "Helper guided you to press: $cmdName",
           )
         }
       }
@@ -501,12 +540,11 @@ object SupportSessionController : TransportListener {
         val obj = runCatching { JSONObject(String(payload, Charsets.UTF_8)) }.getOrNull() ?: return
         val x = obj.optDouble("x", 0.5).toFloat()
         val y = obj.optDouble("y", 0.5).toFloat()
-        val ok = YoutRemoteAccessibilityService.instance?.executeNormalizedTap(x, y) == true
         scope.launch {
+          _uiState.update { it.copy(guidedTapMarker = TapMarker(x, y, System.currentTimeMillis())) }
           addAuditLog(
-            bn = if (ok) "অপর পক্ষ স্ক্রিনে রিমোট ট্যাপ করেছে" else "রিমোট ট্যাপ ব্যর্থ — Accessibility চালু নেই",
-            en = if (ok) "Peer performed remote tap" else "Remote tap skipped — Accessibility disabled",
-            isAlert = !ok,
+            bn = "সহায়তাকারী স্ক্রিনে পয়েন্টার (${(x * 100).toInt()}%, ${(y * 100).toInt()}%) দেখিয়েছেন",
+            en = "Helper pointed on screen (${(x * 100).toInt()}%, ${(y * 100).toInt()}%)",
           )
         }
       }
@@ -565,5 +603,75 @@ object SupportSessionController : TransportListener {
         isAlert = true,
       )
     }
+  }
+
+  // WebBridgeListener callbacks (Laptop browser support)
+  override fun getExpectedSessionCode(): String = _uiState.value.temporaryCode
+
+  override fun getHostDeviceName(): String = _uiState.value.deviceName.ifBlank { "Yout Phone" }
+
+  override fun getLatestScreenFrame(): ByteArray? = latestLocalScreenJpeg
+
+  override fun getChatHistoryJson(): JSONArray {
+    val arr = JSONArray()
+    _uiState.value.chatMessages.takeLast(30).forEach { msg ->
+      arr.put(
+        JSONObject()
+          .put("sender", msg.senderName)
+          .put("text", msg.text)
+          .put("time", msg.timeText),
+      )
+    }
+    return arr
+  }
+
+  override fun isSessionConnected(): Boolean = _uiState.value.connectionState == ConnectionState.CONNECTED
+
+  override fun onWebIncomingConsent(
+    peerName: String,
+    code: String,
+    peerIp: String,
+  ): CompletableDeferred<Boolean> = onIncomingConsent(peerName, code, peerIp)
+
+  override fun onWebConnected(peerName: String, peerEndpoint: String) {
+    onConnected(isHost = true, peerName = peerName, peerEndpoint = peerEndpoint)
+  }
+
+  override fun onWebTapPointer(xNorm: Float, yNorm: Float) {
+    scope.launch {
+      _uiState.update { it.copy(guidedTapMarker = TapMarker(xNorm, yNorm, System.currentTimeMillis())) }
+      addAuditLog(
+        bn = "ল্যাপটপ থেকে স্ক্রিন পয়েন্টার (${(xNorm * 100).toInt()}%, ${(yNorm * 100).toInt()}%) পাঠানো হয়েছে",
+        en = "Laptop pointed on screen (${(xNorm * 100).toInt()}%, ${(yNorm * 100).toInt()}%)",
+      )
+    }
+  }
+
+  override fun onWebNavPrompt(command: String) {
+    val cmd = RemoteNavCommand.entries.find { it.wireCode == command } ?: return
+    scope.launch {
+      _uiState.update { it.copy(guidedNavPrompt = GuidedPrompt(cmd, System.currentTimeMillis())) }
+      addAuditLog(
+        bn = "ল্যাপটপ থেকে নির্দেশনা: ${cmd.wireCode} চাপুন",
+        en = "Laptop guided you to press: ${cmd.wireCode}",
+      )
+    }
+  }
+
+  override fun onWebChatMessage(sender: String, text: String) {
+    scope.launch {
+      val msg = ChatMessage(
+        id = UUID.randomUUID().toString(),
+        senderName = sender,
+        text = text,
+        timeText = currentTimeLabel(),
+        isLocal = false,
+      )
+      _uiState.update { it.copy(chatMessages = it.chatMessages + msg) }
+    }
+  }
+
+  override fun onWebDisconnected(reason: String) {
+    onDisconnected(reason)
   }
 }

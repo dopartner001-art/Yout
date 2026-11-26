@@ -59,6 +59,8 @@ class SupportViewModel(application: Application) : AndroidViewModel(application)
 
   fun buildShareLink(): String = SupportSessionController.buildShareLink()
 
+  fun buildLaptopWebUrl(): String = SupportSessionController.buildLaptopWebUrl()
+
   fun buildManualToken(): String = SupportSessionController.buildManualToken()
 
   fun connectToPeer(hostIp: String, port: Int, code: String) {

@@ -81,9 +81,6 @@ class MainActivity : ComponentActivity() {
             }
             startActivity(Intent.createChooser(shareIntent, "Yout Support Link"))
           },
-          onOpenAccessibility = {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-          },
         )
       }
     }
@@ -115,7 +112,6 @@ private fun YoutAppRoot(
   deepLinkInvite: ParsedInvite?,
   onConsumeDeepLink: () -> Unit,
   onShareText: (String) -> Unit,
-  onOpenAccessibility: () -> Unit,
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val copy = copyFor(state.language)
@@ -187,10 +183,11 @@ private fun YoutAppRoot(
 
   val shareLinkAction: () -> Unit = {
     val link = viewModel.buildShareLink()
+    val laptopUrl = viewModel.buildLaptopWebUrl()
     val message = if (state.language == AppLanguage.BANGLA) {
-      "Yout রিমোট সাপোর্ট লিংক ও কোড:\nকোড: ${state.temporaryCode}\nলিংক: $link"
+      "Yout সাপোর্ট কোড: ${state.temporaryCode}\nমোবাইল লিংক: $link\nল্যাপটপ ব্রাউজার লিংক: $laptopUrl"
     } else {
-      "Yout Remote Support Invite:\nTemporary Code: ${state.temporaryCode}\nLink: $link"
+      "Yout Support Code: ${state.temporaryCode}\nPhone Link: $link\nLaptop Browser: $laptopUrl"
     }
     onShareText(message)
   }
@@ -256,9 +253,12 @@ private fun YoutAppRoot(
                   clipboard.setText(AnnotatedString(state.temporaryCode))
                   Toast.makeText(context, copy.copiedToast, Toast.LENGTH_SHORT).show()
                 },
+                onCopyLaptopLink = {
+                  clipboard.setText(AnnotatedString(viewModel.buildLaptopWebUrl()))
+                  Toast.makeText(context, copy.copiedToast, Toast.LENGTH_SHORT).show()
+                },
                 onOpenManualSignal = { showManualDialog = true },
                 onToggleScreenShare = toggleScreenShareAction,
-                onOpenAccessibilitySettings = onOpenAccessibility,
                 onRequestMediaPermissions = requestMediaPermissionsAction,
                 onRequestNotificationPermission = requestNotificationPermissionAction,
               )
@@ -286,6 +286,7 @@ private fun YoutAppRoot(
                 },
                 onFlipCamera = { viewModel.flipCameraFacing() },
                 onLocalCameraFrame = { viewModel.onLocalCameraFrame(it) },
+                onDisconnect = { viewModel.disconnectSession() },
               )
 
               MainTab.CHAT -> ChatScreen(

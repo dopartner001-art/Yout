@@ -79,9 +79,9 @@ fun ThisDeviceScreen(
   onOpenConnectDialog: () -> Unit,
   onRegenerateCode: () -> Unit,
   onCopyCode: () -> Unit,
+  onCopyLaptopLink: () -> Unit,
   onOpenManualSignal: () -> Unit,
   onToggleScreenShare: () -> Unit,
-  onOpenAccessibilitySettings: () -> Unit,
   onRequestMediaPermissions: () -> Unit,
   onRequestNotificationPermission: () -> Unit,
 ) {
@@ -201,7 +201,7 @@ fun ThisDeviceScreen(
               } else {
                 copy.codeCardWaitingPrefix
               }
-              val accessHint = if (state.permissions.accessibilityEnabled) {
+              val accessHint = if (state.permissions.guidedPointerReady) {
                 copy.enabledLabel
               } else {
                 copy.permAccessibilityTitle
@@ -374,6 +374,45 @@ fun ThisDeviceScreen(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = LightCardSurface,
+              border = BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.3f)),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onCopyLaptopLink)
+                .testTag("copy_laptop_link_pill"),
+            ) {
+              Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text(
+                  text = copy.laptopWebLabel,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = LightTextSecondary,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Text(
+                    text = "http://${state.localIpAddress}:${state.webPort}/?code=${state.temporaryCode}",
+                    fontFamily = JetBrainsMonoFontFamily,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ElectricBlue,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Icon(
+                    imageVector = Icons.Rounded.ContentCopy,
+                    contentDescription = copy.copyLaptopLinkBtn,
+                    tint = ElectricBlue,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
               text = copy.p2pModeFootnote,
               style = MaterialTheme.typography.bodySmall,
@@ -411,11 +450,11 @@ fun ThisDeviceScreen(
           icon = Icons.Rounded.AccessibilityNew,
           title = copy.permAccessibilityTitle,
           subtitle = copy.permAccessibilityDesc,
-          isActive = state.permissions.accessibilityEnabled,
+          isActive = state.permissions.guidedPointerReady,
           activeLabel = copy.enabledLabel,
           inactiveLabel = copy.enableLabel,
-          testTag = "perm_accessibility_card",
-          onClick = onOpenAccessibilitySettings,
+          testTag = "perm_guided_pointer_card",
+          onClick = {},
         )
       }
 

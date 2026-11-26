@@ -171,7 +171,8 @@ fun YoutTopBar(
       // Live Status pill
       val (pillBg, dotColor, statusLabel) = when {
         isConnected -> Triple(Color(0xFF0E382B), EmeraldLive, copy.statusConnected)
-        isConnecting -> Triple(Color(0xFF3A2D12), AmberWait, copy.statusConnecting)
+        isConnecting || state.connectionState == ConnectionState.RECONNECTING ->
+          Triple(Color(0xFF3A2D12), AmberWait, copy.statusConnecting)
         state.connectionState == ConnectionState.LISTENING ->
           Triple(Color(0xFF152749), CyanGlow, copy.statusWaiting)
         else -> Triple(CoralSoftBg, CoralAlert, copy.statusIdle)
@@ -200,7 +201,7 @@ fun YoutTopBar(
         }
       }
 
-      if (isConnected || isConnecting || state.capabilities.screenSharing) {
+      if (isConnected || isConnecting || state.connectionState == ConnectionState.RECONNECTING || state.capabilities.screenSharing) {
         Spacer(modifier = Modifier.width(4.dp))
         IconButton(
           onClick = onDisconnectClick,
@@ -224,6 +225,7 @@ fun TransparencyLiveBanner(
   onDisconnectClick: () -> Unit,
 ) {
   val active = state.connectionState == ConnectionState.CONNECTED ||
+    state.connectionState == ConnectionState.RECONNECTING ||
     state.capabilities.screenSharing ||
     state.capabilities.voiceCallActive ||
     state.capabilities.cameraSharing
@@ -310,7 +312,7 @@ fun TransparencyLiveBanner(
           if (state.capabilities.screenSharing) {
             CapabilityChip(Icons.Rounded.ScreenShare, copy.capScreenOn)
           }
-          if (state.capabilities.remoteControlGranted || state.permissions.accessibilityEnabled) {
+          if (state.capabilities.remoteControlGranted || state.permissions.guidedPointerReady) {
             CapabilityChip(Icons.Rounded.PanToolAlt, copy.capControlOn)
           }
           if (state.capabilities.voiceCallActive) {
