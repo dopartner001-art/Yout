@@ -65,6 +65,9 @@ object SupportSessionController : TransportListener, WebBridgeListener {
   @Volatile
   private var latestLocalScreenJpeg: ByteArray? = null
 
+  @Volatile
+  private var latestLocalCameraJpeg: ByteArray? = null
+
   fun initialize(context: Context) {
     appContext = context.applicationContext
     if (!initialized) {
@@ -225,6 +228,7 @@ object SupportSessionController : TransportListener, WebBridgeListener {
   }
 
   fun onLocalCameraFrameCaptured(jpegBytes: ByteArray) {
+    latestLocalCameraJpeg = jpegBytes
     if (_uiState.value.connectionState == ConnectionState.CONNECTED &&
       _uiState.value.capabilities.cameraSharing
     ) {
@@ -234,6 +238,18 @@ object SupportSessionController : TransportListener, WebBridgeListener {
 
   fun sendNavigationCommand(command: RemoteNavCommand) {
     if (_uiState.value.connectionState == ConnectionState.CONNECTED &&
+      webServer?.hasActiveWebSession() == true
+    ) {
+      webServer?.queueLaptopCommand(
+        JSONObject()
+          .put("type", "nav")
+          .put("cmd", command.wireCode),
+      )
+      addAuditLog(
+        bn = "ল্যাপটপে কমান্ড পাঠানো হয়েছে: ${command.wireCode}",
+        en = "Sent command to laptop: ${command.wireCode}",
+      )
+    } else if (_uiState.value.connectionState == ConnectionState.CONNECTED &&
       _uiState.value.role == SessionRole.CONTROLLER
     ) {
       transport?.sendPacket(WirePacketType.NAV_COMMAND, command.wireCode.toByteArray(Charsets.UTF_8))
@@ -251,9 +267,20 @@ object SupportSessionController : TransportListener, WebBridgeListener {
   }
 
   fun sendRemoteTap(xNorm: Float, yNorm: Float) {
-    if (_uiState.value.connectionState == ConnectionState.CONNECTED &&
-      _uiState.value.role == SessionRole.CONTROLLER
-    ) {
+    if (_uiState.value.connectionState != ConnectionState.CONNECTED) return
+    if (webServer?.hasActiveWebSession() == true) {
+      webServer?.queueLaptopCommand(
+        JSONObject()
+          .put("type", "tap")
+          .put("x", xNorm.toDouble())
+          .put("y", yNorm.toDouble()),
+      )
+      _uiState.update { it.copy(guidedTapMarker = TapMarker(xNorm, yNorm, System.currentTimeMillis())) }
+      addAuditLog(
+        bn = "ল্যাপটপ স্ক্রিনে ক্লিক পাঠানো হয়েছে (${(xNorm * 100).toInt()}%, ${(yNorm * 100).toInt()}%)",
+        en = "Sent laptop click (${(xNorm * 100).toInt()}%, ${(yNorm * 100).toInt()}%)",
+      )
+    } else if (_uiState.value.role == SessionRole.CONTROLLER) {
       val json = JSONObject()
         .put("x", xNorm.toDouble())
         .put("y", yNorm.toDouble())
@@ -298,6 +325,7 @@ object SupportSessionController : TransportListener, WebBridgeListener {
   }
 
   fun setCameraSharing(enabled: Boolean) {
+    if (!enabled) latestLocalCameraJpeg = null
     _uiState.update {
       it.copy(capabilities = it.capabilities.copy(cameraSharing = enabled))
     }
@@ -480,6 +508,8 @@ object SupportSessionController : TransportListener, WebBridgeListener {
 
   override fun onDisconnected(reason: String) {
     scope.launch {
+      latestLocalScreenJpeg = null
+      latestLocalCameraJpeg = null
       stopSessionTimer()
       voiceManager?.stop()
       webServer?.clearActiveWebSession()
@@ -610,7 +640,12 @@ object SupportSessionController : TransportListener, WebBridgeListener {
 
   override fun getHostDeviceName(): String = _uiState.value.deviceName.ifBlank { "Yout Phone" }
 
+  override fun getLocalHostIp(): String = _uiState.value.localIpAddress
+
   override fun getLatestScreenFrame(): ByteArray? = latestLocalScreenJpeg
+
+  override fun getLatestCameraFrame(): ByteArray? =
+    if (_uiState.value.capabilities.cameraSharing) latestLocalCameraJpeg else null
 
   override fun getChatHistoryJson(): JSONArray {
     val arr = JSONArray()
@@ -668,6 +703,18 @@ object SupportSessionController : TransportListener, WebBridgeListener {
         isLocal = false,
       )
       _uiState.update { it.copy(chatMessages = it.chatMessages + msg) }
+    }
+  }
+
+  override fun onLaptopScreenFrame(jpegBytes: ByteArray) {
+    val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return
+    scope.launch {
+      _uiState.update {
+        it.copy(
+          remoteScreenFrame = bmp,
+          capabilities = it.capabilities.copy(screenSharing = true),
+        )
+      }
     }
   }
 

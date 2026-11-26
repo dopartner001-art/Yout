@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import androidx.activity.compose.BackHandler
@@ -716,7 +717,7 @@ private fun FullscreenRemoteScreenDialog(
             contentDescription = copy.remoteScreenTitle,
             contentScale = ContentScale.Fit,
             modifier = Modifier
-              .fillMaxSize()
+              .fillMaxWidth()
               .aspectRatio(frameAspect)
               .graphicsLayer(
                 scaleX = scale,
@@ -899,11 +900,22 @@ private fun CameraXPreviewBox(
                   val rawBytes = rawOut.toByteArray()
                   val bmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
                   if (bmp != null) {
-                    val scaled = Bitmap.createScaledBitmap(bmp, 360, (360 * bmp.height / bmp.width.coerceAtLeast(1)).coerceAtLeast(240), true)
+                    val rotation = proxy.imageInfo.rotationDegrees
+                    val rotated = if (rotation != 0) {
+                      val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                      Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true).also {
+                        if (it != bmp) bmp.recycle()
+                      }
+                    } else {
+                      bmp
+                    }
+                    val targetW = 360
+                    val targetH = (targetW * rotated.height / rotated.width.coerceAtLeast(1)).coerceAtLeast(200)
+                    val scaled = Bitmap.createScaledBitmap(rotated, targetW, targetH, true)
                     val jpgOut = ByteArrayOutputStream()
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 50, jpgOut)
-                    if (scaled != bmp) scaled.recycle()
-                    bmp.recycle()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 55, jpgOut)
+                    if (scaled != rotated) scaled.recycle()
+                    rotated.recycle()
                     onFrameCaptured(jpgOut.toByteArray())
                   }
                 }
